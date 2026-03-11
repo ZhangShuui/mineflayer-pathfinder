@@ -116,8 +116,8 @@ function inject (bot) {
 
   function detectDiggingStopped () {
     digging = false
-    bot.removeAllListeners('diggingAborted', detectDiggingStopped)
-    bot.removeAllListeners('diggingCompleted', detectDiggingStopped)
+    bot.removeListener('diggingAborted', detectDiggingStopped)
+    bot.removeListener('diggingCompleted', detectDiggingStopped)
   }
 
   function resetPath (reason, clearStates = true) {
@@ -283,15 +283,16 @@ function inject (bot) {
   }
 
   function closestPointOnLineSegment (point, segmentStart, segmentEnd) {
-    const segmentLength = segmentEnd.minus(segmentStart).norm()
+    const segment = segmentEnd.minus(segmentStart)
+    const segmentLengthSq = segment.dot(segment)
 
-    if (segmentLength === 0) {
+    if (segmentLengthSq === 0) {
       return segmentStart
     }
 
     // t is like an interpolation from segmentStart to segmentEnd
     //  for the closest point on the line
-    let t = (point.minus(segmentStart)).dot(segmentEnd.minus(segmentStart)) / segmentLength
+    let t = (point.minus(segmentStart)).dot(segment) / segmentLengthSq
 
     // bound t to be on the segment
     t = Math.max(0, Math.min(1, t))
