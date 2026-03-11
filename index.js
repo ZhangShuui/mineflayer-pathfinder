@@ -27,8 +27,11 @@ function inject (bot) {
   let placing = false
   let placingBlock = null
   let lastNodeTime = performance.now()
+  let lastNodePos = null // position when lastNodeTime was last updated
   let returningPos = null
   let stopPathing = false
+  let stuckCount = 0 // consecutive stucks without meaningful progress toward goal
+  let lastGoalDistAtStuck = null
   const physics = new Physics(bot)
   const lockPlaceBlock = new Lock()
   const lockEquipItem = new Lock()
@@ -142,6 +145,9 @@ function inject (bot) {
   bot.pathfinder.setGoal = (goal, dynamic = false) => {
     stateGoal = goal
     dynamicGoal = dynamic
+    stuckCount = 0
+    lastGoalDistAtStuck = null
+    lastNodePos = null
     bot.emit('goal_updated', goal, dynamic)
     resetPath('goal_updated')
   }
@@ -455,7 +461,6 @@ function inject (bot) {
     }
 
     if (path.length === 0) {
-      lastNodeTime = performance.now()
       if (stateGoal && stateMovements) {
         if (stateGoal.isEnd(bot.entity.position.floored())) {
           if (!dynamicGoal) {
@@ -464,11 +469,17 @@ function inject (bot) {
             fullStop()
           }
         } else if (!pathUpdated) {
+          lastNodeTime = performance.now()
+          lastNodePos = bot.entity.position.clone()
           const results = bot.pathfinder.getPathTo(stateMovements, stateGoal)
           bot.emit('path_update', results)
           path = results.path
           astartTimedout = results.status === 'partial'
           pathUpdated = true
+        } else if (performance.now() - lastNodeTime > 3500) {
+          // Path is empty, A* was started (pathUpdated=true) but bot consumed
+          // trivial paths without making real spatial progress
+          if (handleStuck()) return
         }
       }
     }
@@ -496,6 +507,7 @@ function inject (bot) {
             })
             .then(function () {
               lastNodeTime = performance.now()
+              lastNodePos = bot.entity.position.clone()
               digging = false
             })
         }
@@ -567,6 +579,7 @@ function inject (bot) {
                 lockPlaceBlock.release()
                 placing = false
                 lastNodeTime = performance.now()
+                lastNodePos = bot.entity.position.clone()
               })
           })
           .catch(_ignoreError => {})
@@ -578,8 +591,11 @@ function inject (bot) {
     const dy = nextPoint.y - p.y
     let dz = nextPoint.z - p.z
     if (Math.abs(dx) <= 0.35 && Math.abs(dz) <= 0.35 && Math.abs(dy) < 1) {
-      // arrived at next point
-      lastNodeTime = performance.now()
+      // arrived at next point — only count as progress if bot actually moved
+      if (!lastNodePos || p.distanceTo(lastNodePos) > 0.5) {
+        lastNodeTime = performance.now()
+        lastNodePos = p.clone()
+      }
       if (stopPathing) {
         stop()
         return
@@ -631,9 +647,38 @@ function inject (bot) {
 
     // check for futility
     if (performance.now() - lastNodeTime > 3500) {
-      // should never take this long to go to the next node
-      resetPath('stuck')
+      handleStuck()
     }
+  }
+
+  /**
+   * Handles stuck detection. Returns true if the goal was abandoned (noPath).
+   */
+  function handleStuck () {
+    if (stateGoal) {
+      const currentDist = stateGoal.heuristic(bot.entity.position.floored())
+      if (lastGoalDistAtStuck !== null && currentDist >= lastGoalDistAtStuck - 2) {
+        // Not making meaningful progress toward goal
+        stuckCount++
+      } else {
+        stuckCount = 0
+      }
+      lastGoalDistAtStuck = currentDist
+    } else {
+      stuckCount++
+    }
+
+    if (stuckCount >= 3) {
+      // Stuck too many times without meaningful progress toward goal
+      stuckCount = 0
+      lastGoalDistAtStuck = null
+      bot.emit('path_update', { status: 'noPath', path: [], visitedNodes: 0, time: 0 })
+      stateGoal = null
+      fullStop()
+      return true
+    }
+    resetPath('stuck')
+    return false
   }
 }
 
