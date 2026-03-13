@@ -567,6 +567,41 @@ describe('pathfinder Movement', function () {
       defaultMovement.clearProtectedBlocks()
       assert.ok(defaultMovement.safeToBreak(block), 'block should be breakable after clearing')
     })
+
+    it('protectStructureFromCommands', function () {
+      const block = bot.blockAt(targetBlock)
+      const origin = { x: targetBlock.x - 3, y: targetBlock.y, z: targetBlock.z - 1 }
+      const commands = [
+        { cmd: 'fill', x1: 2, y1: 0, z1: 0, x2: 4, y2: 2, z2: 2, block: 'oak_planks' },
+        { cmd: 'fill', x1: 3, y1: 0, z1: 1, x2: 3, y2: 1, z2: 1, block: 'air' }
+      ]
+      // targetBlock is at origin + (3, 0, 1), which fill covers then air removes
+      defaultMovement.protectStructureFromCommands(origin, commands)
+      assert.ok(defaultMovement.safeToBreak(block), 'air-carved block should be breakable')
+      // check a non-air block at origin + (2, 0, 0) is protected
+      const wallPos = new Vec3(origin.x + 2, origin.y, origin.z)
+      const wallBlock = bot.blockAt(wallPos)
+      if (wallBlock && wallBlock.type) {
+        assert.ok(!defaultMovement.safeToBreak(wallBlock), 'wall block should be protected')
+      }
+      defaultMovement.clearProtectedBlocks()
+    })
+
+    it('loadProtectedStructures', function () {
+      const block = bot.blockAt(targetBlock)
+      const structures = [
+        { id: 'house_1', coordinates: { x: targetBlock.x, y: targetBlock.y, z: targetBlock.z } }
+      ]
+      const structCommandsMap = {
+        house_1: [
+          { cmd: 'sb', x: 0, y: 0, z: 0, block: 'stone' }
+        ]
+      }
+      defaultMovement.loadProtectedStructures(structures, structCommandsMap)
+      assert.ok(!defaultMovement.safeToBreak(block), 'block loaded via loadProtectedStructures should be protected')
+      defaultMovement.clearProtectedBlocks()
+      assert.ok(defaultMovement.safeToBreak(block), 'block should be breakable after clearing')
+    })
   })
 
   describe('open door handling', function () {
