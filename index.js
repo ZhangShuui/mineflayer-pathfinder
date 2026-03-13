@@ -187,6 +187,31 @@ function inject (bot) {
     stopPathing = true
   }
 
+  /**
+   * Load structure protection from a directory containing blueprint.json and struct_*.json.
+   * Protected blocks will persist across setMovements() calls.
+   * @param {string} dirPath Path to the data directory
+   * @param {function} [filter] Optional filter (structure) => boolean, defaults to agent houses
+   * @returns {number} Number of protected block positions added
+   */
+  let protectionDir = null
+  let protectionFilter = null
+  bot.pathfinder.loadStructureProtection = (dirPath, filter) => {
+    protectionDir = dirPath
+    protectionFilter = filter || (s => s.id.startsWith('agent_house_'))
+    const added = stateMovements.loadProtectedStructuresFromDir(protectionDir, protectionFilter)
+    return added
+  }
+
+  // Re-apply protection when movements are replaced
+  const origSetMovements = bot.pathfinder.setMovements
+  bot.pathfinder.setMovements = (movements) => {
+    if (protectionDir) {
+      movements.loadProtectedStructuresFromDir(protectionDir, protectionFilter)
+    }
+    origSetMovements(movements)
+  }
+
   bot.on('physicsTick', monitorMovement)
 
   function postProcessPath (path) {
