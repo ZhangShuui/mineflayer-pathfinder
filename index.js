@@ -22,6 +22,7 @@ function inject (bot) {
   let astartTimedout = false
   let dynamicGoal = false
   let path = []
+  let pathIdx = 0
   let pathUpdated = false
   let digging = false
   let placing = false
@@ -32,6 +33,8 @@ function inject (bot) {
   let stopPathing = false
   let stuckCount = 0 // consecutive stucks without meaningful progress toward goal
   let lastGoalDistAtStuck = null
+  let straightLineCache = null // { pathHead: Move, sprint: bool|null, result: string }
+  // result: 'sprintLine', 'sprintJump', 'walkLine', 'walkJump', 'none'
   const physics = new Physics(bot)
   const lockPlaceBlock = new Lock()
   const lockEquipItem = new Lock()
@@ -45,7 +48,12 @@ function inject (bot) {
   bot.pathfinder.enablePathShortcut = false // disabled by default as it can cause bugs in specific configurations
   bot.pathfinder.LOSWhenPlacingBlocks = true
 
+  const harvestToolCache = new Map()
+
   bot.pathfinder.bestHarvestTool = (block) => {
+    const cached = harvestToolCache.get(block.type)
+    if (cached !== undefined) return cached
+
     const availableTools = bot.inventory.items()
     const effects = bot.entity.effects
 
@@ -60,8 +68,11 @@ function inject (bot) {
       }
     }
 
+    harvestToolCache.set(block.type, bestTool)
     return bestTool
   }
+
+  bot.pathfinder.clearHarvestToolCache = () => harvestToolCache.clear()
 
   bot.pathfinder.getPathTo = (movements, goal, timeout) => {
     const generator = bot.pathfinder.getPathFromTo(movements, bot.entity.position, goal, { timeout })
@@ -124,8 +135,10 @@ function inject (bot) {
   }
 
   function resetPath (reason, clearStates = true) {
-    if (!stopPathing && path.length > 0) bot.emit('path_reset', reason)
+    if (!stopPathing && pathIdx < path.length) bot.emit('path_reset', reason)
     path = []
+    pathIdx = 0
+    straightLineCache = null
     if (digging) {
       bot.on('diggingAborted', detectDiggingStopped)
       bot.on('diggingCompleted', detectDiggingStopped)
@@ -148,6 +161,7 @@ function inject (bot) {
     stuckCount = 0
     lastGoalDistAtStuck = null
     lastNodePos = null
+    harvestToolCache.clear()
     bot.emit('goal_updated', goal, dynamic)
     resetPath('goal_updated')
   }
@@ -157,7 +171,7 @@ function inject (bot) {
     resetPath('movements_updated')
   }
 
-  bot.pathfinder.isMoving = () => path.length > 0
+  bot.pathfinder.isMoving = () => pathIdx < path.length
   bot.pathfinder.isMining = () => digging
   bot.pathfinder.isBuilding = () => placing
 
@@ -210,12 +224,12 @@ function inject (bot) {
     return newPath
   }
 
-  function pathFromPlayer (path) {
-    if (path.length === 0) return
+  function pathFromPlayer (p) {
+    if (p.length === 0) return 0
     let minI = 0
     let minDistance = 1000
-    for (let i = 0; i < path.length; i++) {
-      const node = path[i]
+    for (let i = 0; i < p.length; i++) {
+      const node = p[i]
       if (node.toBreak.length !== 0 || node.toPlace.length !== 0) break
       const dist = bot.entity.position.distanceSquared(node)
       if (dist < minDistance) {
@@ -224,20 +238,20 @@ function inject (bot) {
       }
     }
     // check if we are between 2 nodes
-    const n1 = path[minI]
+    const n1 = p[minI]
     // check if node already reached
     const dx = n1.x - bot.entity.position.x
     const dy = n1.y - bot.entity.position.y
     const dz = n1.z - bot.entity.position.z
     const reached = Math.abs(dx) <= 0.35 && Math.abs(dz) <= 0.35 && Math.abs(dy) < 1
-    if (minI + 1 < path.length && n1.toBreak.length === 0 && n1.toPlace.length === 0) {
-      const n2 = path[minI + 1]
+    if (minI + 1 < p.length && n1.toBreak.length === 0 && n1.toPlace.length === 0) {
+      const n2 = p[minI + 1]
       const d2 = bot.entity.position.distanceSquared(n2)
       const d12 = n1.distanceSquared(n2)
       minI += d12 > d2 || reached ? 1 : 0
     }
 
-    path.splice(0, minI)
+    return minI
   }
 
   function isPositionNearPath (pos, path) {
@@ -398,6 +412,7 @@ function inject (bot) {
     stopPathing = false
     stateGoal = null
     path = []
+    pathIdx = 0
     bot.emit('path_stop')
     fullStop()
   }
@@ -414,16 +429,17 @@ function inject (bot) {
     if (astarContext) {
       const cx = chunk.x >> 4
       const cz = chunk.z >> 4
-      if (astarContext.visitedChunks.has(`${cx - 1},${cz}`) ||
-          astarContext.visitedChunks.has(`${cx},${cz - 1}`) ||
-          astarContext.visitedChunks.has(`${cx + 1},${cz}`) ||
-          astarContext.visitedChunks.has(`${cx},${cz + 1}`)) {
+      if (astarContext.visitedChunks.has((cx - 1) * 67108864 + cz) ||
+          astarContext.visitedChunks.has(cx * 67108864 + (cz - 1)) ||
+          astarContext.visitedChunks.has((cx + 1) * 67108864 + cz) ||
+          astarContext.visitedChunks.has(cx * 67108864 + (cz + 1))) {
         resetPath('chunk_loaded', false)
       }
     }
   })
 
   function monitorMovement () {
+    if (!stateGoal && pathIdx >= path.length && !astarContext) return
     // Test freemotion
     if (stateMovements && stateMovements.allowFreeMotion && stateGoal && stateGoal.entity) {
       const target = stateGoal.entity
@@ -449,9 +465,10 @@ function inject (bot) {
     if (astarContext && astartTimedout) {
       const results = astarContext.compute()
       results.path = postProcessPath(results.path)
-      pathFromPlayer(results.path)
+      const skip = pathFromPlayer(results.path)
       bot.emit('path_update', results)
       path = results.path
+      pathIdx = skip
       astartTimedout = results.status === 'partial'
     }
 
@@ -460,7 +477,7 @@ function inject (bot) {
       returningPos = null
     }
 
-    if (path.length === 0) {
+    if (pathIdx >= path.length) {
       if (stateGoal && stateMovements) {
         if (stateGoal.isEnd(bot.entity.position.floored())) {
           if (!dynamicGoal) {
@@ -474,6 +491,7 @@ function inject (bot) {
           const results = bot.pathfinder.getPathTo(stateMovements, stateGoal)
           bot.emit('path_update', results)
           path = results.path
+          pathIdx = 0
           astartTimedout = results.status === 'partial'
           pathUpdated = true
         } else if (performance.now() - lastNodeTime > 3500) {
@@ -484,11 +502,11 @@ function inject (bot) {
       }
     }
 
-    if (path.length === 0) {
+    if (pathIdx >= path.length) {
       return
     }
 
-    let nextPoint = path[0]
+    let nextPoint = path[pathIdx]
     const p = bot.entity.position
 
     // Handle digging
@@ -600,8 +618,8 @@ function inject (bot) {
         stop()
         return
       }
-      path.shift()
-      if (path.length === 0) { // done
+      pathIdx++
+      if (pathIdx >= path.length) { // done
         // If the block the bot is standing on is not a full block only checking for the floored position can fail as
         // the distance to the goal can get greater then 0 when the vector is floored.
         if (!dynamicGoal && stateGoal && (stateGoal.isEnd(p.floored()) || stateGoal.isEnd(p.floored().offset(0, 1, 0)))) {
@@ -612,7 +630,7 @@ function inject (bot) {
         return
       }
       // not done yet
-      nextPoint = path[0]
+      nextPoint = path[pathIdx]
       if (nextPoint.toBreak.length > 0 || nextPoint.toPlace.length > 0) {
         fullStop()
         return
@@ -628,21 +646,44 @@ function inject (bot) {
     if (bot.entity.isInWater) {
       bot.setControlState('jump', true)
       bot.setControlState('sprint', false)
-    } else if (stateMovements.allowSprinting && physics.canStraightLine(path, true)) {
-      bot.setControlState('jump', false)
-      bot.setControlState('sprint', true)
-    } else if (stateMovements.allowSprinting && physics.canSprintJump(path)) {
-      bot.setControlState('jump', true)
-      bot.setControlState('sprint', true)
-    } else if (physics.canStraightLine(path)) {
-      bot.setControlState('jump', false)
-      bot.setControlState('sprint', false)
-    } else if (physics.canWalkJump(path)) {
-      bot.setControlState('jump', true)
-      bot.setControlState('sprint', false)
     } else {
-      bot.setControlState('forward', false)
-      bot.setControlState('sprint', false)
+      // Cache physics simulation results — invalidated when path head changes
+      const pathHead = path[pathIdx]
+      if (!straightLineCache || straightLineCache.pathHead !== pathHead) {
+        const activePath = pathIdx > 0 ? path.slice(pathIdx) : path
+        let result = 'none'
+        if (stateMovements.allowSprinting && physics.canStraightLine(activePath, true)) {
+          result = 'sprintLine'
+        } else if (stateMovements.allowSprinting && physics.canSprintJump(activePath)) {
+          result = 'sprintJump'
+        } else if (physics.canStraightLine(activePath)) {
+          result = 'walkLine'
+        } else if (physics.canWalkJump(activePath)) {
+          result = 'walkJump'
+        }
+        straightLineCache = { pathHead, result }
+      }
+      switch (straightLineCache.result) {
+        case 'sprintLine':
+          bot.setControlState('jump', false)
+          bot.setControlState('sprint', true)
+          break
+        case 'sprintJump':
+          bot.setControlState('jump', true)
+          bot.setControlState('sprint', true)
+          break
+        case 'walkLine':
+          bot.setControlState('jump', false)
+          bot.setControlState('sprint', false)
+          break
+        case 'walkJump':
+          bot.setControlState('jump', true)
+          bot.setControlState('sprint', false)
+          break
+        default:
+          bot.setControlState('forward', false)
+          bot.setControlState('sprint', false)
+      }
     }
 
     // check for futility
