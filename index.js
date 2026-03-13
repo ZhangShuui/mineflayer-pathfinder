@@ -35,6 +35,8 @@ function inject (bot) {
   let lastGoalDistAtStuck = null
   let straightLineCache = null // { pathHead: Move, sprint: bool|null, result: string }
   // result: 'sprintLine', 'sprintJump', 'walkLine', 'walkJump', 'none'
+  let cornerStuckTicks = 0
+  let lastMonitorPos = null
   const physics = new Physics(bot)
   const lockPlaceBlock = new Lock()
   const lockEquipItem = new Lock()
@@ -139,6 +141,8 @@ function inject (bot) {
     path = []
     pathIdx = 0
     straightLineCache = null
+    cornerStuckTicks = 0
+    lastMonitorPos = null
     if (digging) {
       bot.on('diggingAborted', detectDiggingStopped)
       bot.on('diggingCompleted', detectDiggingStopped)
@@ -195,6 +199,24 @@ function inject (bot) {
         curPoint.y = Math.floor(curPoint.y)
         curPoint.z = Math.floor(curPoint.z) + 0.5
         continue
+      }
+      // Open doors/gates/trapdoors: treat as air (don't stand on them)
+      if (b && stateMovements.doorLikeBlocks.has(b.type) && b.getProperties) {
+        const props = b.getProperties()
+        if (props && props.open) {
+          const below = bot.blockAt(new Vec3(curPoint.x, curPoint.y - 1, curPoint.z))
+          const np2 = getPositionOnTopOf(below)
+          if (np2) {
+            curPoint.x = np2.x
+            curPoint.y = np2.y
+            curPoint.z = np2.z
+          } else {
+            curPoint.x = Math.floor(curPoint.x) + 0.5
+            curPoint.y = curPoint.y - 1
+            curPoint.z = Math.floor(curPoint.z) + 0.5
+          }
+          continue
+        }
       }
       let np = getPositionOnTopOf(b)
       if (np === null) np = getPositionOnTopOf(bot.blockAt(new Vec3(curPoint.x, curPoint.y - 1, curPoint.z)))
@@ -684,6 +706,25 @@ function inject (bot) {
           bot.setControlState('forward', false)
           bot.setControlState('sprint', false)
       }
+    }
+
+    // Corner-stuck recovery: if on ground, pressing forward, but barely moving
+    if (bot.entity.onGround && bot.controlState.forward && !bot.entity.isInWater) {
+      if (lastMonitorPos) {
+        const movedSq = bot.entity.position.distanceSquared(lastMonitorPos)
+        if (movedSq < 0.001) {
+          cornerStuckTicks++
+          if (cornerStuckTicks >= 3) {
+            bot.setControlState('jump', true)
+          }
+        } else {
+          cornerStuckTicks = 0
+        }
+      }
+      lastMonitorPos = bot.entity.position.clone()
+    } else {
+      cornerStuckTicks = 0
+      lastMonitorPos = null
     }
 
     // check for futility

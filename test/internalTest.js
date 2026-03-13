@@ -533,6 +533,7 @@ describe('pathfinder Movement', function () {
   describe('safeToBreak world editing', function () {
     this.afterAll(async () => {
       defaultMovement.canDig = true
+      defaultMovement.clearProtectedBlocks()
       await bot.world.setBlock(targetBlock.offset(1, 0, 0), new Block(mcData.blocksByName.air.id, 0))
     })
 
@@ -544,6 +545,48 @@ describe('pathfinder Movement', function () {
       defaultMovement.canDig = true
       await bot.world.setBlock(targetBlock.offset(1, 0, 0), new Block(mcData.blocksByName.water.id, 0, 0))
       assert.ok(!defaultMovement.safeToBreak(block))
+    })
+
+    it('protectedBlocks', async function () {
+      // Clean up water from previous safeToBreak test
+      await bot.world.setBlock(targetBlock.offset(1, 0, 0), new Block(mcData.blocksByName.air.id, 0))
+      const block = bot.blockAt(targetBlock)
+      assert.ok(defaultMovement.safeToBreak(block), 'block should be breakable by default')
+      defaultMovement.protectBlocks([targetBlock])
+      assert.ok(!defaultMovement.safeToBreak(block), 'protected block should not be breakable')
+      defaultMovement.clearProtectedBlocks()
+      assert.ok(defaultMovement.safeToBreak(block), 'block should be breakable after clearing protection')
+    })
+
+    it('protectStructureBlocks', function () {
+      const block = bot.blockAt(targetBlock)
+      const center = { x: targetBlock.x - 2, y: targetBlock.y, z: targetBlock.z }
+      const relativePositions = [{ x: 2, y: 0, z: 0 }]
+      defaultMovement.protectStructureBlocks(center, relativePositions)
+      assert.ok(!defaultMovement.safeToBreak(block), 'structure-protected block should not be breakable')
+      defaultMovement.clearProtectedBlocks()
+      assert.ok(defaultMovement.safeToBreak(block), 'block should be breakable after clearing')
+    })
+  })
+
+  describe('open door handling', function () {
+    it('openDoorIsPassable', async function () {
+      if (!mcData.blocksByName.oak_door) return // skip if version doesn't have doors
+      const doorPos = targetBlock.offset(2, 0, 0)
+      // Place a closed door
+      const closedDoor = Block.fromProperties(mcData.blocksByName.oak_door.id, { facing: 'north', half: 'lower', hinge: 'left', open: false, powered: false }, 0)
+      await bot.world.setBlock(doorPos, closedDoor)
+      const closedBlock = defaultMovement.getBlock(doorPos, 0, 0, 0)
+      assert.ok(closedBlock.physical || !closedBlock.safe, 'closed door should block movement')
+
+      // Place an open door
+      const openDoor = Block.fromProperties(mcData.blocksByName.oak_door.id, { facing: 'north', half: 'lower', hinge: 'left', open: true, powered: false }, 0)
+      await bot.world.setBlock(doorPos, openDoor)
+      const openBlock = defaultMovement.getBlock(doorPos, 0, 0, 0)
+      assert.ok(!openBlock.physical && openBlock.safe, 'open door should be passable')
+
+      // Cleanup
+      await bot.world.setBlock(doorPos, new Block(mcData.blocksByName.air.id, 0))
     })
   })
 
