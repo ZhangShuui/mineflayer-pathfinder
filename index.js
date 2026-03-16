@@ -141,6 +141,13 @@ function inject (bot) {
     path = []
     pathIdx = 0
     straightLineCache = null
+    // Always clear corner-stuck recovery states, even when clearStates=false
+    // (block_updated, chunk_loaded). Otherwise strafing/back controls leak.
+    if (cornerStuckTicks > 0) {
+      bot.setControlState('left', false)
+      bot.setControlState('right', false)
+      bot.setControlState('back', false)
+    }
     cornerStuckTicks = 0
     lastMonitorPos = null
     if (digging) {
@@ -541,6 +548,13 @@ function inject (bot) {
           pathIdx = 0
           astartTimedout = results.status === 'partial'
           pathUpdated = true
+          // If A* returned noPath immediately (no reachable neighbors from
+          // start), skip the slow 3×3.5s retry loop — the bot is truly stuck
+          if (results.status === 'noPath' && results.visitedNodes <= 1) {
+            stateGoal = null
+            fullStop()
+            return
+          }
         } else if (performance.now() - lastNodeTime > 3500) {
           // Path is empty, A* was started (pathUpdated=true) but bot consumed
           // trivial paths without making real spatial progress
@@ -739,21 +753,53 @@ function inject (bot) {
       }
     }
 
-    // Corner-stuck recovery: if on ground, pressing forward, but barely moving
+    // Corner-stuck recovery: if pressing forward but barely moving horizontally.
+    // Uses horizontal distance only so Phase 1 jumping (vertical movement) doesn't
+    // falsely reset the counter. The onGround check is kept for the initial entry
+    // but an else-if preserves state during brief airborne from Phase 1 jumps.
     if (bot.entity.onGround && bot.controlState.forward && !bot.entity.isInWater) {
       if (lastMonitorPos) {
-        const movedSq = bot.entity.position.distanceSquared(lastMonitorPos)
-        if (movedSq < 0.001) {
+        const dx = bot.entity.position.x - lastMonitorPos.x
+        const dz = bot.entity.position.z - lastMonitorPos.z
+        const movedHorizSq = dx * dx + dz * dz
+        if (movedHorizSq < 0.001) {
           cornerStuckTicks++
-          if (cornerStuckTicks >= 3) {
+          if (cornerStuckTicks >= 3 && cornerStuckTicks < 6) {
+            // Phase 1: try jumping over the obstacle
             bot.setControlState('jump', true)
+          } else if (cornerStuckTicks >= 6 && cornerStuckTicks < 10) {
+            // Phase 2: strafe to slide along the wall
+            // Alternate direction: ticks 6-7 left, 8-9 right
+            bot.setControlState('jump', false)
+            const strafeRight = cornerStuckTicks >= 8
+            bot.setControlState('left', !strafeRight)
+            bot.setControlState('right', strafeRight)
+          } else if (cornerStuckTicks >= 10) {
+            // Phase 3: all recovery failed, escalate to stuck handler
+            bot.setControlState('left', false)
+            bot.setControlState('right', false)
+            cornerStuckTicks = 0
+            if (handleStuck()) return
           }
         } else {
+          if (cornerStuckTicks > 0) {
+            bot.setControlState('left', false)
+            bot.setControlState('right', false)
+            bot.setControlState('back', false)
+          }
           cornerStuckTicks = 0
         }
       }
       lastMonitorPos = bot.entity.position.clone()
+    } else if (cornerStuckTicks >= 3 && !bot.entity.onGround && bot.controlState.forward && !bot.entity.isInWater) {
+      // Briefly airborne from Phase 1 jump — preserve recovery state.
+      // Don't update lastMonitorPos so we compare against pre-jump position.
     } else {
+      if (cornerStuckTicks > 0) {
+        bot.setControlState('left', false)
+        bot.setControlState('right', false)
+        bot.setControlState('back', false)
+      }
       cornerStuckTicks = 0
       lastMonitorPos = null
     }
