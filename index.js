@@ -602,9 +602,15 @@ function inject (bot) {
         bot.activateBlock(bot.blockAt(new Vec3(placingBlock.x, placingBlock.y, placingBlock.z))).then(() => {
           lockUseBlock.release()
           placingBlock = nextPoint.toPlace.shift()
+          if (!placingBlock) {
+            placing = false
+            lastNodeTime = performance.now()
+            lastNodePos = bot.entity.position.clone()
+          }
         }, err => {
           console.error(err)
           lockUseBlock.release()
+          placing = false
         })
         return
       }
