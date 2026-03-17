@@ -625,6 +625,57 @@ describe('pathfinder Movement', function () {
     })
   })
 
+  describe('carpet-like blocks as walkable ground', function () {
+    const lilyPos = new Vec3(5, 1, 5)
+    const carpetPos = new Vec3(7, 1, 5)
+
+    afterEach(async function () {
+      await bot.world.setBlock(lilyPos, Block.fromProperties(mcData.blocksByName.air.id, {}, 0))
+      await bot.world.setBlock(carpetPos, Block.fromProperties(mcData.blocksByName.air.id, {}, 0))
+    })
+
+    it('lilyPadIsPhysicalAndSafe', async function () {
+      await bot.world.setBlock(lilyPos, Block.fromProperties(mcData.blocksByName.lily_pad.id, {}, 0))
+      const block = defaultMovement.getBlock(lilyPos, 0, 0, 0)
+      assert.ok(block.physical, 'lily_pad should be physical (walkable ground)')
+      assert.ok(block.safe, 'lily_pad should be safe (passable at head/feet level)')
+    })
+
+    it('carpetIsPhysicalAndSafe', async function () {
+      await bot.world.setBlock(carpetPos, Block.fromProperties(mcData.blocksByName.white_carpet.id, {}, 0))
+      const block = defaultMovement.getBlock(carpetPos, 0, 0, 0)
+      assert.ok(block.physical, 'white_carpet should be physical (walkable ground)')
+      assert.ok(block.safe, 'white_carpet should be safe (passable at head/feet level)')
+    })
+
+    it('getMoveForwardOntoLilyPad', async function () {
+      await bot.world.setBlock(lilyPos, Block.fromProperties(mcData.blocksByName.lily_pad.id, {}, 0))
+      const startPos = lilyPos.offset(-1, 0, 0)
+      const dir = new Vec3(1, 0, 0)
+      const neighbors = []
+      defaultMovement.getMoveForward(startPos, dir, neighbors)
+      const landsOnLily = neighbors.some(n => n.x === lilyPos.x && n.z === lilyPos.z)
+      assert.ok(landsOnLily, 'getMoveForward should generate a neighbor landing on lily pad')
+    })
+
+    it('getNeighborsFromLilyPad', async function () {
+      await bot.world.setBlock(lilyPos, Block.fromProperties(mcData.blocksByName.lily_pad.id, {}, 0))
+      const standingPos = lilyPos.offset(0, 1, 0)
+      const neighbors = defaultMovement.getNeighbors(standingPos)
+      assert.ok(neighbors.length > 0, 'should have neighbors when standing on lily pad')
+    })
+
+    it('getLandingBlockOnLilyPad', async function () {
+      await bot.world.setBlock(lilyPos, Block.fromProperties(mcData.blocksByName.lily_pad.id, {}, 0))
+      const abovePos = lilyPos.offset(-1, 3, 0)
+      const dir = new Vec3(1, 0, 0)
+      const block = defaultMovement.getLandingBlock(abovePos, dir)
+      assert.ok(block != null, 'landing block should not be null')
+      if (!block) return
+      assert.ok(block.position.y === lilyPos.y + 1, `should land on top of lily pad (y=${block.position.y} === ${lilyPos.y + 1})`)
+    })
+  })
+
   it('safeOrBreak', function () {
     const block = defaultMovement.getBlock(targetBlock, 0, 0, 0)
     const toBreak = []
