@@ -674,6 +674,52 @@ describe('pathfinder Movement', function () {
       if (!block) return
       assert.ok(block.position.y === lilyPos.y + 1, `should land on top of lily pad (y=${block.position.y} === ${lilyPos.y + 1})`)
     })
+
+    it('walkBetweenLilyPadsOverWater', async function () {
+      // Simulate two adjacent lily pads over water
+      const waterPos1 = new Vec3(3, 0, 3)
+      const waterPos2 = new Vec3(4, 0, 3)
+      const lily1 = new Vec3(3, 1, 3)
+      const lily2 = new Vec3(4, 1, 3)
+      await bot.world.setBlock(waterPos1, Block.fromProperties(mcData.blocksByName.water.id, {}, 0))
+      await bot.world.setBlock(waterPos2, Block.fromProperties(mcData.blocksByName.water.id, {}, 0))
+      await bot.world.setBlock(lily1, Block.fromProperties(mcData.blocksByName.lily_pad.id, {}, 0))
+      await bot.world.setBlock(lily2, Block.fromProperties(mcData.blocksByName.lily_pad.id, {}, 0))
+
+      // Standing on lily1 at y=2 (feet above lily pad), walk forward to lily2
+      const standingPos = lily1.offset(0, 1, 0)
+      const dir = new Vec3(1, 0, 0)
+      const neighbors = []
+      defaultMovement.getMoveForward(standingPos, dir, neighbors)
+      const walksToLily2 = neighbors.some(n => n.x === lily2.x && n.y === lily2.y + 1 && n.z === lily2.z)
+      assert.ok(walksToLily2, 'should walk forward between lily pads over water')
+
+      // Cleanup
+      await bot.world.setBlock(waterPos1, Block.fromProperties(mcData.blocksByName.bedrock.id, {}, 0))
+      await bot.world.setBlock(waterPos2, Block.fromProperties(mcData.blocksByName.bedrock.id, {}, 0))
+      await bot.world.setBlock(lily1, Block.fromProperties(mcData.blocksByName.air.id, {}, 0))
+      await bot.world.setBlock(lily2, Block.fromProperties(mcData.blocksByName.air.id, {}, 0))
+    })
+
+    it('jumpUpOntoLilyPadFromShore', async function () {
+      // Shore at y=0 (bedrock), water at y=0 one step forward, lily pad at y=1
+      const waterPos = new Vec3(3, 0, 4)
+      const lilyOnWater = new Vec3(3, 1, 4)
+      await bot.world.setBlock(waterPos, Block.fromProperties(mcData.blocksByName.water.id, {}, 0))
+      await bot.world.setBlock(lilyOnWater, Block.fromProperties(mcData.blocksByName.lily_pad.id, {}, 0))
+
+      // Standing on bedrock at (3, 1, 3), try to reach lily pad at (3, 1, 4)
+      const shorePos = new Vec3(3, 1, 3)
+      const dir = new Vec3(0, 0, 1)
+      const neighbors = []
+      defaultMovement.getMoveJumpUp(shorePos, dir, neighbors)
+      const jumpsOntoLily = neighbors.some(n => n.x === lilyOnWater.x && n.z === lilyOnWater.z && n.y === lilyOnWater.y + 1)
+      assert.ok(jumpsOntoLily, 'should jump up onto lily pad from shore (via getMoveJumpUp)')
+
+      // Cleanup
+      await bot.world.setBlock(waterPos, Block.fromProperties(mcData.blocksByName.bedrock.id, {}, 0))
+      await bot.world.setBlock(lilyOnWater, Block.fromProperties(mcData.blocksByName.air.id, {}, 0))
+    })
   })
 
   it('safeOrBreak', function () {
