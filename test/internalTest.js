@@ -342,7 +342,7 @@ describe('pathfinder events', function () {
     afterEach((done) => {
       bot.pathfinder.setGoal(null)
       setTimeout(done)
-      const listeners = ['goal_reached', 'goal_updated', 'path_update', 'path_stop']
+      const listeners = ['goal_reached', 'goal_updated', 'path_update', 'path_stop', 'path_reset']
       listeners.forEach(l => bot.removeAllListeners(l))
     })
 
@@ -372,6 +372,148 @@ describe('pathfinder events', function () {
       bot.pathfinder.setGoal(new goals.GoalNear(targetBlock.x, targetBlock.y, targetBlock.z, 1))
       bot.once('path_stop', () => done())
       bot.pathfinder.stop()
+    })
+
+    it('blockUpdate solid-to-solid near path should NOT reset', function (done) {
+      this.timeout(3000)
+      this.slow(1000)
+      bot.pathfinder.setGoal(new goals.GoalNear(targetBlock.x, targetBlock.y, targetBlock.z, 1))
+      bot.once('path_update', () => {
+        setTimeout(() => {
+          let resetFired = false
+          bot.once('path_reset', () => { resetFired = true })
+          // farmland→dirt: different types, both boundingBox 'block'
+          const oldBlock = { type: 60, boundingBox: 'block', position: new Vec3(9, 0, 8) }
+          const newBlock = { type: 10, boundingBox: 'block' }
+          bot.emit('blockUpdate', oldBlock, newBlock)
+          setTimeout(() => {
+            assert.ok(!resetFired, 'solid-to-solid should not trigger path_reset')
+            done()
+          }, 50)
+        }, 10)
+      })
+    })
+
+    it('blockUpdate solid-to-air near path SHOULD reset', function (done) {
+      this.timeout(3000)
+      this.slow(1000)
+      bot.pathfinder.setGoal(new goals.GoalNear(targetBlock.x, targetBlock.y, targetBlock.z, 1))
+      bot.once('path_update', () => {
+        // Wait a tick so the internal path variable is assigned after path_update emits
+        setTimeout(() => {
+          bot.once('path_reset', (reason) => {
+            assert.strictEqual(reason, 'block_updated')
+            done()
+          })
+          // stone→air: different types, different boundingBox
+          const oldBlock = { type: 1, boundingBox: 'block', position: new Vec3(9, 0, 8) }
+          const newBlock = { type: 0, boundingBox: 'empty' }
+          bot.emit('blockUpdate', oldBlock, newBlock)
+        }, 10)
+      })
+    })
+
+    it('blockUpdate air-to-water near path SHOULD reset', function (done) {
+      this.timeout(3000)
+      this.slow(1000)
+      bot.pathfinder.setGoal(new goals.GoalNear(targetBlock.x, targetBlock.y, targetBlock.z, 1))
+      bot.once('path_update', () => {
+        setTimeout(() => {
+          bot.once('path_reset', (reason) => {
+            assert.strictEqual(reason, 'block_updated')
+            done()
+          })
+          // air→water: different types, both boundingBox 'empty'
+          const oldBlock = { type: 0, boundingBox: 'empty', position: new Vec3(9, 0, 8) }
+          const newBlock = { type: 9, boundingBox: 'empty' }
+          bot.emit('blockUpdate', oldBlock, newBlock)
+        }, 10)
+      })
+    })
+
+    it('blockUpdate same type near path should NOT reset', function (done) {
+      this.timeout(3000)
+      this.slow(1000)
+      bot.pathfinder.setGoal(new goals.GoalNear(targetBlock.x, targetBlock.y, targetBlock.z, 1))
+      bot.once('path_update', () => {
+        setTimeout(() => {
+          let resetFired = false
+          bot.once('path_reset', () => { resetFired = true })
+          // same type (e.g. door state change): should not reset
+          const oldBlock = { type: 64, boundingBox: 'block', position: new Vec3(9, 0, 8) }
+          const newBlock = { type: 64, boundingBox: 'block' }
+          bot.emit('blockUpdate', oldBlock, newBlock)
+          setTimeout(() => {
+            assert.ok(!resetFired, 'same-type update should not trigger path_reset')
+            done()
+          }, 50)
+        }, 10)
+      })
+    })
+
+    it('blockUpdate far from path should NOT reset', function (done) {
+      this.timeout(3000)
+      this.slow(1000)
+      bot.pathfinder.setGoal(new goals.GoalNear(targetBlock.x, targetBlock.y, targetBlock.z, 1))
+      bot.once('path_update', () => {
+        setTimeout(() => {
+          let resetFired = false
+          bot.once('path_reset', () => { resetFired = true })
+          // block far from path (0, 0, 0) - well outside isPositionNearPath range
+          const oldBlock = { type: 1, boundingBox: 'block', position: new Vec3(0, 0, 0) }
+          const newBlock = { type: 0, boundingBox: 'empty' }
+          bot.emit('blockUpdate', oldBlock, newBlock)
+          setTimeout(() => {
+            assert.ok(!resetFired, 'block far from path should not trigger path_reset')
+            done()
+          }, 50)
+        }, 10)
+      })
+    })
+
+    it('blockUpdate solid-to-fence near path SHOULD reset', function (done) {
+      this.timeout(3000)
+      this.slow(1000)
+      const fenceId = mcData.blocksByName.oak_fence.id
+      bot.pathfinder.setGoal(new goals.GoalNear(targetBlock.x, targetBlock.y, targetBlock.z, 1))
+      bot.once('path_update', () => {
+        setTimeout(() => {
+          bot.once('path_reset', (reason) => {
+            assert.strictEqual(reason, 'block_updated')
+            done()
+          })
+          // dirt→fence: both boundingBox 'block' but fence is NOT walkable
+          const oldBlock = { type: mcData.blocksByName.dirt.id, boundingBox: 'block', position: new Vec3(9, 0, 8) }
+          const newBlock = { type: fenceId, boundingBox: 'block' }
+          bot.emit('blockUpdate', oldBlock, newBlock)
+        }, 10)
+      })
+    })
+
+    it('blockUpdate with missing position should not crash', function (done) {
+      this.timeout(3000)
+      this.slow(1000)
+      bot.pathfinder.setGoal(new goals.GoalNear(targetBlock.x, targetBlock.y, targetBlock.z, 1))
+      bot.once('path_update', () => {
+        setTimeout(() => {
+          let resetFired = false
+          let errorThrown = false
+          bot.once('path_reset', () => { resetFired = true })
+          try {
+            // oldBlock has no position property
+            const oldBlock = { type: 1, boundingBox: 'block' }
+            const newBlock = { type: 0, boundingBox: 'empty' }
+            bot.emit('blockUpdate', oldBlock, newBlock)
+          } catch (e) {
+            errorThrown = true
+          }
+          setTimeout(() => {
+            assert.ok(!errorThrown, 'should not throw on missing position')
+            assert.ok(!resetFired, 'should not reset on missing position')
+            done()
+          }, 50)
+        }, 10)
+      })
     })
   })
 })

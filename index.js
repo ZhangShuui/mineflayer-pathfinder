@@ -473,7 +473,16 @@ function inject (bot) {
 
   bot.on('blockUpdate', (oldBlock, newBlock) => {
     if (!oldBlock || !newBlock) return
-    if (isPositionNearPath(oldBlock.position, path) && oldBlock.type !== newBlock.type) {
+    if (oldBlock.type === newBlock.type) return
+    // Only skip reset for solid-to-solid transitions where both blocks are
+    // normal walkable solids (boundingBox 'block' and not fences/walls).
+    // Cosmetic changes like farmland→dirt don't affect walkability and would
+    // otherwise cause path oscillation when walking through farms.
+    // Fences/walls have boundingBox 'block' but are NOT walkable (shapes[0][4] > 1),
+    // so transitions involving them must still trigger a reset.
+    if (oldBlock.boundingBox === 'block' && newBlock.boundingBox === 'block' &&
+      !stateMovements.fences.has(oldBlock.type) && !stateMovements.fences.has(newBlock.type)) return
+    if (oldBlock.position && isPositionNearPath(oldBlock.position, path)) {
       resetPath('block_updated', false)
     }
   })
@@ -748,7 +757,10 @@ function inject (bot) {
           bot.setControlState('sprint', false)
           break
         default:
-          bot.setControlState('forward', false)
+          // When physics simulation can't verify any locomotion mode, keep walking
+          // forward without sprint. The A* path is valid; stopping here causes
+          // oscillation in pits/farms. Corner-stuck recovery handles true stuck cases.
+          bot.setControlState('jump', false)
           bot.setControlState('sprint', false)
       }
     }
